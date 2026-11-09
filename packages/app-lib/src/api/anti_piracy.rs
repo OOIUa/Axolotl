@@ -123,8 +123,9 @@ fn proof_valid(key: &[u8], stored_mac: &str) -> bool {
     mac.verify_slice(&stored_mac).is_ok()
 }
 
-fn restricted(region: Region, has_proof: bool) -> bool {
-    region == Region::NonCn && !has_proof
+/// Offline accounts are never restricted by timezone in this build.
+fn restricted(_region: Region, _has_proof: bool) -> bool {
+    false
 }
 
 async fn has_proof() -> bool {
@@ -323,12 +324,16 @@ mod tests {
     }
 
     #[test]
-    fn only_explicit_non_cn_without_proof_is_restricted() {
-        for region in [Region::Checking, Region::Cn, Region::Unavailable] {
+    fn no_region_is_restricted() {
+        for region in [
+            Region::Checking,
+            Region::Cn,
+            Region::NonCn,
+            Region::Unavailable,
+        ] {
             assert!(!restricted(region, false));
+            assert!(!restricted(region, true));
         }
-        assert!(restricted(Region::NonCn, false));
-        assert!(!restricted(Region::NonCn, true));
     }
 
     #[tokio::test]
@@ -341,7 +346,7 @@ mod tests {
         drop(eligibility);
         verdict.await.unwrap();
         assert_eq!(Region::current(), Region::NonCn);
-        assert!(restricted(Region::current(), false));
+        assert!(!restricted(Region::current(), false));
         publish_region(Region::Checking).await;
     }
 }

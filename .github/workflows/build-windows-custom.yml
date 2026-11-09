@@ -1,0 +1,89 @@
+name: Build Windows (custom)
+
+on:
+  push:
+    branches: [custom-build]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-custom-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resources:
+    name: Prepare build resources
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Prepare build resources
+        run: node scripts/axolotl/prepare-build-resources.mjs
+      - name: Upload build resources
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-resources
+          path: target/build-resources/
+          overwrite: true
+          retention-days: 3
+          if-no-files-found: error
+
+  windows:
+    name: Build Windows installers
+    needs: resources
+    runs-on: windows-2025
+    timeout-minutes: 300
+    env:
+      SQLX_OFFLINE: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - name: Setup desktop build
+        uses: ./.github/actions/setup-desktop-build
+        with:
+          profile: release
+      - name: Compile application
+        env:
+          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+        run: node scripts/axolotl/build-desktop.mjs --profile release
+      - name: Compile Windows installer UI
+        run: node scripts/axolotl/build-desktop.mjs --profile release --installer-only
+      - name: Package installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$PWD"
+          export CARGO_TARGET_DIR="$root/target"
+          export AXOLOTL_INSTALLER_UI_PATH="$root/target/release/axolotl-installer-ui.exe"
+          version="$(node -p "require('./apps/app-frontend/package.json').version")"
+          bundle="$root/target/release/bundle/nsis"
+          out="$root/target/custom-installers"
+          mkdir -p "$out"
+          for variant in modern native; do
+            rm -f "$bundle"/*-setup.exe
+            (cd apps/app && pnpm tauri bundle --ci --bundles nsis --no-sign --config tauri-release.conf.json --config "tauri-$variant.conf.json")
+            cp "$bundle"/*-setup.exe "$out/Axolotl_Launcher_${version}_x64_${variant}_offline-unlocked-setup.exe"
+          done
+          ls -la "$out"
+      - name: Upload installers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: axolotl-windows-installers
+          path: target/custom-installers/
+          retention-days: 14
+          if-no-files-found: error
